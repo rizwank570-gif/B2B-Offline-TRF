@@ -5,6 +5,10 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>Redcliffe Labs | Customer Registration Portal</title>
     
+    <!-- External Libraries for QR Generation and Scanning -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+    <script src="https://unpkg.com/html5-qrcode" type="text/javascript"></script>
+
     <style>
         /* Color Variables */
         :root {
@@ -324,6 +328,15 @@
         </div>
     </div>
 
+    <!-- QR Scanner Modal Overlay -->
+    <div id="scanner-modal-overlay" class="hidden no-print" style="position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(15, 23, 42, 0.9); display: flex; align-items: center; justify-content: center; z-index: 2000;">
+        <div class="modal-card" style="width: 100%; max-width: 500px; padding: 1.5rem;">
+            <h3 style="margin-bottom: 1rem;">Scan Patient QR Code</h3>
+            <div id="qr-reader" style="width: 100%; margin-bottom: 1rem; border-radius: 0.5rem; overflow: hidden;"></div>
+            <button type="button" class="btn-secondary" onclick="closeScanner()">Cancel / बंद करें</button>
+        </div>
+    </div>
+
     <div id="receipt-print-area"></div>
 
     <div class="container-wrapper no-print">
@@ -357,7 +370,10 @@
 
                 <div class="section-title" style="display: flex; justify-content: space-between; align-items: center; margin: 0 0 1rem 0;"> 
                     <span>Pre-Registration Data / पूर्व पंजीकरण डेटा</span>
-                    <button type="button" class="btn-secondary" style="width: auto; padding: 0.5rem 1rem;" onclick="togglePreReg()" id="prereg-toggle-btn">Upload CSV / डेटा अपलोड करें</button>
+                    <div style="display: flex; gap: 0.5rem;">
+                        <button type="button" class="btn-primary" style="background-color: var(--color-secondary); width: auto; padding: 0.5rem 1rem;" onclick="openScanner()">📷 Scan QR</button>
+                        <button type="button" class="btn-secondary" style="width: auto; padding: 0.5rem 1rem;" onclick="togglePreReg()" id="prereg-toggle-btn">Upload CSV</button>
+                    </div>
                 </div>
                 
                 <div id="prereg-container" class="hidden">
@@ -901,22 +917,31 @@
                 list.innerHTML = '<p class="text-subtle italic text-center py-4">No local data found</p>';
                 return;
             }
-            list.innerHTML = registrations.map(reg => `
-                <div class="registration-item">
-                    <div style="flex: 1;">
-                        <div style="font-weight: 800; color: var(--color-primary); font-size: 0.8rem;">${reg.campCode || 'N/A'} | ${reg.externalRclId || reg.bookingId}</div>
-                        <div style="font-weight: bold; margin: 2px 0;">${reg.fullName}</div>
-                        <div class="text-subtle">${reg.age}Y | ${reg.gender} | ${reg.mobile}</div>
-                        <div style="margin-top: 4px;">
-                            <span class="badge ${reg.synced ? 'badge-success' : 'badge-pending'}">${reg.synced ? '✓ Synced' : '⚠ Pending Sync'}</span>
-                            <span class="badge ${reg.bloodCollected ? 'badge-success' : 'badge-pending'}">${reg.bloodCollected ? '🩸 Blood Collected' : '⏳ Blood Pending'}</span>
+            list.innerHTML = registrations.map(reg => {
+                const displayId = reg.externalRclId ? reg.externalRclId : reg.bookingId;
+                return `
+                <div class="registration-item" style="flex-direction: column; gap: 0.5rem;">
+                    <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 10px;">
+                        <div style="flex: 1; min-width: 0;">
+                            <div style="font-weight: 800; color: var(--color-primary); font-size: 0.85rem; word-break: break-word;">
+                                ID: ${displayId}
+                            </div>
+                            <div style="font-size: 0.75rem; color: #64748b; margin-top: 2px;">Camp: ${reg.campCode || 'N/A'}</div>
                         </div>
+                        <button onclick="printReceipt(${reg.id})" class="btn-print" style="flex-shrink: 0;">Print</button>
                     </div>
-                    <div style="text-align: right; display: flex; flex-direction: column; gap: 5px; align-items: flex-end;">
-                        <button onclick="printReceipt(${reg.id})" class="btn-print">Print</button>
+                    
+                    <div style="background: #f1f5f9; padding: 0.5rem; border-radius: 0.375rem; border: 1px solid #e2e8f0;">
+                        <div style="font-weight: bold; font-size: 0.95rem; color: #1e293b;">${reg.fullName}</div>
+                        <div class="text-subtle" style="margin-top: 2px;">${reg.age} Yrs | ${reg.gender} | 📞 ${reg.mobile}</div>
+                    </div>
+
+                    <div style="display: flex; gap: 0.5rem; flex-wrap: wrap; margin-top: 2px;">
+                        <span class="badge ${reg.synced ? 'badge-success' : 'badge-pending'}">${reg.synced ? '✓ Synced' : '⚠ Pending Sync'}</span>
+                        <span class="badge ${reg.bloodCollected ? 'badge-success' : 'badge-pending'}">${reg.bloodCollected ? '🩸 Blood Collected' : '⏳ Blood Pending'}</span>
                     </div>
                 </div>
-            `).join('');
+            `}).join('');
         }
 
         // --- Optimized Export Functions ---
@@ -1023,6 +1048,40 @@
             }
         }
 
+        function loadRecordIntoForm(localFound) {
+            document.getElementById('full-name').value = localFound.fullName;
+            document.getElementById('age').value = localFound.age;
+            document.getElementById('gender').value = localFound.gender;
+            document.getElementById('employee-id').value = localFound.empId;
+            document.getElementById('email').value = localFound.email;
+            document.getElementById('mobile-number').value = localFound.mobile;
+            document.getElementById('external-rcl-id').value = localFound.externalRclId;
+            document.getElementById('start-date').value = localFound.date;
+            document.getElementById('phlebo-name').value = localFound.phleboName;
+            
+            // Vitals
+            document.getElementById('v-height').value = localFound.v_height || '';
+            document.getElementById('v-weight').value = localFound.v_weight || '';
+            document.getElementById('v-bp').value = localFound.v_bp || '';
+            document.getElementById('v-pulse').value = localFound.v_pulse || '';
+            document.getElementById('v-spo2').value = localFound.v_spo2 || '';
+            document.getElementById('v-rbs').value = localFound.v_rbs || '';
+            
+            document.getElementById('remarks').value = localFound.remarks || '';
+            document.getElementById('blood-collected').checked = localFound.bloodCollected === true;
+            
+            // SET UPDATE TRACKER
+            document.getElementById('existing-booking-id').value = localFound.bookingId;
+            
+            // Show vitals tab if data exists
+            if(localFound.v_bp || localFound.v_weight || localFound.v_rbs || localFound.v_height) {
+                 document.getElementById('vitals-container').classList.remove('hidden');
+                 document.getElementById('vitals-toggle-btn').textContent = 'Hide Vitals / माप छिपाएँ';
+            }
+            
+            saveDraft();
+        }
+
         function attemptAutoSelectCustomer(type, val) {
             if (!val) return;
             
@@ -1030,36 +1089,7 @@
             let localFound = registrations.find(x => type === 'mobile' ? x.mobile == val : x.email?.toLowerCase() === val.toLowerCase());
             
             if (localFound) {
-                document.getElementById('full-name').value = localFound.fullName;
-                document.getElementById('age').value = localFound.age;
-                document.getElementById('gender').value = localFound.gender;
-                document.getElementById('employee-id').value = localFound.empId;
-                document.getElementById('email').value = localFound.email;
-                document.getElementById('external-rcl-id').value = localFound.externalRclId;
-                document.getElementById('start-date').value = localFound.date;
-                document.getElementById('phlebo-name').value = localFound.phleboName;
-                
-                // Vitals
-                document.getElementById('v-height').value = localFound.v_height || '';
-                document.getElementById('v-weight').value = localFound.v_weight || '';
-                document.getElementById('v-bp').value = localFound.v_bp || '';
-                document.getElementById('v-pulse').value = localFound.v_pulse || '';
-                document.getElementById('v-spo2').value = localFound.v_spo2 || '';
-                document.getElementById('v-rbs').value = localFound.v_rbs || '';
-                
-                document.getElementById('remarks').value = localFound.remarks || '';
-                document.getElementById('blood-collected').checked = localFound.bloodCollected === true;
-                
-                // SET UPDATE TRACKER
-                document.getElementById('existing-booking-id').value = localFound.bookingId;
-                
-                // Show vitals tab if data exists
-                if(localFound.v_bp || localFound.v_weight || localFound.v_rbs) {
-                     document.getElementById('vitals-container').classList.remove('hidden');
-                     document.getElementById('vitals-toggle-btn').textContent = 'Hide Vitals / माप छिपाएँ';
-                }
-                
-                saveDraft();
+                loadRecordIntoForm(localFound);
                 displayStatus("Record found! Ready to mark Blood Collection.", "success");
                 return;
             }
@@ -1074,6 +1104,44 @@
                 document.getElementById('pre-select-customer').value = found.id; 
                 populateFormFromSelection(); 
             }
+        }
+
+        // --- Scanner Logic ---
+        let html5QrcodeScanner;
+
+        function openScanner() {
+            document.getElementById('scanner-modal-overlay').classList.remove('hidden');
+            html5QrcodeScanner = new Html5QrcodeScanner(
+                "qr-reader", 
+                { fps: 10, qrbox: {width: 250, height: 250} },
+                /* verbose= */ false
+            );
+            html5QrcodeScanner.render(onScanSuccess, onScanFailure);
+        }
+
+        function closeScanner() {
+            document.getElementById('scanner-modal-overlay').classList.add('hidden');
+            if (html5QrcodeScanner) {
+                html5QrcodeScanner.clear().catch(error => console.error("Failed to clear scanner", error));
+            }
+        }
+
+        function onScanSuccess(decodedText, decodedResult) {
+            closeScanner();
+            
+            // Search local records for the scanned ID (checking both internal bookingId and external ID)
+            let localFound = registrations.find(x => x.bookingId === decodedText || x.externalRclId === decodedText);
+            
+            if (localFound) {
+                loadRecordIntoForm(localFound);
+                displayStatus("QR Scan Successful! Patient loaded.", "success");
+            } else {
+                displayStatus("No matching local record found for this QR code.", "error");
+            }
+        }
+
+        function onScanFailure(error) {
+            // handle scan failure, usually better to ignore and keep scanning
         }
 
         function togglePreReg() {
@@ -1094,21 +1162,45 @@
             const reg = registrations.find(r => r.id === id) || registrations[0];
             const printArea = document.getElementById('receipt-print-area');
             const genderHin = reg.gender === 'male' ? 'पुरुष' : (reg.gender === 'female' ? 'महिला' : 'अन्य');
+            const displayId = reg.externalRclId || reg.bookingId;
+            
             printArea.innerHTML = `
                 <div class="receipt-header"><strong>REDCLIFFE LABS</strong><br>Registration Receipt</div>
-                <div class="receipt-id">${reg.externalRclId || reg.bookingId}</div>
+                <div class="receipt-id">${displayId}</div>
+                <div id="receipt-qr-code" style="display: flex; justify-content: center; margin: 10px 0;"></div>
                 <div class="receipt-row"><span>Camp:</span> <span>${reg.campCode || 'N/A'}</span></div>
                 <div class="receipt-row"><span>Name:</span> <span>${reg.fullName}</span></div>
                 <div class="receipt-row"><span>Age/Sex:</span> <span>${reg.age}/${genderHin}</span></div>
                 <div class="receipt-row"><span>Mobile:</span> <span>${reg.mobile}</span></div>
-                <div class="receipt-row"><span>Date:</span> <span>${reg.date}</span></div>
-                <div style="margin: 8px 0; border-top: 1px dashed black; padding-top: 5px; font-weight: bold;">VITALS:</div>
+                <div style="margin: 8px 0; border-top: 1px dashed black; padding-top: 5px; font-weight: bold;">VITALS & STATUS:</div>
+                <div class="receipt-row"><span>Height:</span> <span>${getVitalValue(reg, 'v_height') ? getVitalValue(reg, 'v_height') + ' cm' : '--'}</span></div>
+                <div class="receipt-row"><span>Weight:</span> <span>${getVitalValue(reg, 'v_weight') ? getVitalValue(reg, 'v_weight') + ' kg' : '--'}</span></div>
                 <div class="receipt-row"><span>BP:</span> <span>${getVitalValue(reg, 'v_bp') || '--'}</span></div>
                 <div class="receipt-row"><span>Pulse:</span> <span>${getVitalValue(reg, 'v_pulse') || '--'}</span></div>
-                <div class="receipt-row"><span>RBS:</span> <span>${getVitalValue(reg, 'v_rbs') || '--'}</span></div>
+                <div class="receipt-row" style="margin-top: 4px;"><span>Vitals:</span> <strong>${reg.vitalsStatus || 'Pending'}</strong></div>
+                <div class="receipt-row"><span>Blood:</span> <strong>${reg.bloodCollected ? 'Completed' : 'Pending'}</strong></div>
+                <div class="receipt-row" style="margin-top: 4px; flex-direction: column;">
+                    <span>Remarks:</span>
+                    <span style="font-size: 9px; margin-top: 2px;">${reg.remarks || 'None'}</span>
+                </div>
                 <div class="receipt-footer">Thank you / धन्यवाद</div>
             `;
-            window.print();
+            
+            // Generate QR Code dynamically
+            document.getElementById('receipt-qr-code').innerHTML = ""; // Clear existing
+            new QRCode(document.getElementById("receipt-qr-code"), {
+                text: displayId,
+                width: 100,
+                height: 100,
+                colorDark : "#000000",
+                colorLight : "#ffffff",
+                correctLevel : QRCode.CorrectLevel.L
+            });
+
+            // Brief delay to allow QR Code image to render before browser captures the print view
+            setTimeout(() => {
+                window.print();
+            }, 300);
         }
 
         function clearLocalData() {
