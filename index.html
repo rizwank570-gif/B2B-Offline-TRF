@@ -834,7 +834,11 @@
             if (existingId) {
                 // Update Mode
                 const index = registrations.findIndex(r => r.bookingId === bookingId);
-                if (index !== -1) registrations[index] = entry;
+                if (index !== -1) {
+                    registrations[index] = entry; // Update local existing
+                } else {
+                    registrations.unshift(entry); // Save locally (fetched from cross-counter QR)
+                }
                 displayStatus(cloudSuccess ? `Updated & Synced: ${bookingId}` : `Updated Locally: ${bookingId}`, cloudSuccess ? 'success' : 'secondary');
             } else {
                 // New Mode
@@ -1129,19 +1133,72 @@
         function onScanSuccess(decodedText, decodedResult) {
             closeScanner();
             
-            // Search local records for the scanned ID (checking both internal bookingId and external ID)
-            let localFound = registrations.find(x => x.bookingId === decodedText || x.externalRclId === decodedText);
-            
-            if (localFound) {
-                loadRecordIntoForm(localFound);
-                displayStatus("QR Scan Successful! Patient loaded.", "success");
-            } else {
-                displayStatus("No matching local record found for this QR code.", "error");
+            try {
+                // 1. Try parsing the QR code text as JSON (New Offline-Transfer QR format)
+                const data = JSON.parse(decodedText);
+                
+                // 2. Validate Camp Code
+                const currentCamp = document.getElementById('active-camp-code').value;
+                if (data.c && data.c !== currentCamp) {
+                    displayStatus("Error: QR Code belongs to a different Camp (" + data.c + ").", "error");
+                    return;
+                }
+
+                // 3. Search local records first to see if we already have this patient
+                let localFound = registrations.find(x => x.bookingId === data.b);
+                
+                if (localFound) {
+                    loadRecordIntoForm(localFound);
+                    displayStatus("QR Scan Successful! Local record found.", "success");
+                } else {
+                    // 4. If not found locally, load the data perfectly mapped from the QR payload
+                    const mappedRecord = {
+                        bookingId: data.b,
+                        externalRclId: data.e,
+                        campCode: data.c,
+                        fullName: data.n,
+                        age: data.a,
+                        gender: data.g,
+                        mobile: data.m,
+                        empId: data.em || "",
+                        phleboName: data.p,
+                        email: "", date: new Date().toISOString().split('T')[0],
+                        v_height: data.vh || "", 
+                        v_weight: data.vw || "", 
+                        v_bp: data.vbp || "", 
+                        v_pulse: data.vp || "", 
+                        v_spo2: data.vo || "", 
+                        v_rbs: data.vr || "",
+                        remarks: "", bloodCollected: false
+                    };
+                    
+                    loadRecordIntoForm(mappedRecord);
+                    displayStatus("QR Scan Successful! Patient data fetched from QR.", "success");
+                }
+                
+            } catch (e) {
+                // Fallback for old QR codes (that only contain the ID string instead of JSON)
+                let localFound = registrations.find(x => x.bookingId === decodedText || x.externalRclId === decodedText);
+                
+                if (localFound) {
+                    loadRecordIntoForm(localFound);
+                    displayStatus("QR Scan Successful! Patient loaded locally.", "success");
+                } else {
+                    // Check CSV pre-registrations as a final fallback
+                    let csvFound = preRegisteredCustomers.find(x => x.externalRclId === decodedText || x.empId === decodedText);
+                    if (csvFound) {
+                        document.getElementById('pre-select-customer').value = csvFound.id; 
+                        populateFormFromSelection();
+                        displayStatus("QR Scan Successful! Patient loaded from CSV.", "success");
+                    } else {
+                        displayStatus("No matching local data found for this QR code.", "error");
+                    }
+                }
             }
         }
 
         function onScanFailure(error) {
-            // handle scan failure, usually better to ignore and keep scanning
+            // handle scan failure implicitly
         }
 
         function togglePreReg() {
@@ -1186,15 +1243,34 @@
                 <div class="receipt-footer">Thank you / धन्यवाद</div>
             `;
             
+            // Build Offline Data Payload for QR Code Transfer
+            const qrData = JSON.stringify({
+                b: reg.bookingId,
+                e: reg.externalRclId || "",
+                c: reg.campCode || "",
+                n: reg.fullName || "",
+                a: reg.age || "",
+                g: reg.gender || "",
+                m: reg.mobile || "",
+                em: reg.empId || "",
+                p: reg.phleboName || "",
+                vh: getVitalValue(reg, 'v_height') || "",
+                vw: getVitalValue(reg, 'v_weight') || "",
+                vbp: getVitalValue(reg, 'v_bp') || "",
+                vp: getVitalValue(reg, 'v_pulse') || "",
+                vo: getVitalValue(reg, 'v_spo2') || "",
+                vr: getVitalValue(reg, 'v_rbs') || ""
+            });
+
             // Generate QR Code dynamically
             document.getElementById('receipt-qr-code').innerHTML = ""; // Clear existing
             new QRCode(document.getElementById("receipt-qr-code"), {
-                text: displayId,
-                width: 100,
-                height: 100,
+                text: qrData,
+                width: 140, // Larger size to handle denser JSON payload
+                height: 140,
                 colorDark : "#000000",
                 colorLight : "#ffffff",
-                correctLevel : QRCode.CorrectLevel.L
+                correctLevel : QRCode.CorrectLevel.L // Low correction keeps it readable by standard scanners
             });
 
             // Brief delay to allow QR Code image to render before browser captures the print view
