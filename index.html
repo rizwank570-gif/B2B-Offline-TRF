@@ -419,12 +419,9 @@
                         <input type="text" id="employee-id" name="employee-id" placeholder="Optional / वैकल्पिक" class="input-field persist">
                     </div>
                     
-                    <div class="span-2">
+                    <div>
                         <label for="mobile-number">Mobile Number / मोबाइल नंबर *</label>
-                        <div style="display: flex; gap: 0.5rem;">
-                            <input type="tel" id="mobile-number" name="mobile-number" required pattern="[0-9]{10}" maxlength="10" title="Please enter a valid 10-digit mobile number" placeholder="10-digit number" class="input-field persist" style="flex: 1;">
-                            <button type="button" id="search-mobile-btn" class="btn-secondary" style="width: auto; padding: 0.5rem 1rem; background: #e0f2fe; border-color: #7dd3fc; color: #0369a1;" onclick="attemptAutoSelectCustomer('mobile', document.getElementById('mobile-number').value)">🔍 Search</button>
-                        </div>
+                        <input type="tel" id="mobile-number" name="mobile-number" required pattern="[0-9]{10}" maxlength="10" title="Please enter a valid 10-digit mobile number" placeholder="10-digit number" class="input-field persist" oninput="handleMobileInput(this.value)">
                     </div>
 
                     <div>
@@ -533,7 +530,7 @@
 
     <script>
         // --- CONFIGURATION ---
-        const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbwat0JUBhcMlIFzwbtLoe69HAjmPvsUqdPH1R6BRIattGo3-XxmLV66Ou8KNEs9B11l_w/exec"; 
+        const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbwhS__RzOhW3u8IelXkl8t5p1Jb47OW_BtrVWphm16A1GYpBzBPWO7lThOs9FMjz9OkUA/exec"; 
 
         let registrations = [];
         let preRegisteredCustomers = [];
@@ -561,6 +558,9 @@
             
             const persistInputs = document.querySelectorAll('.persist');
             persistInputs.forEach(input => input.addEventListener('input', saveDraft));
+            
+            // Email auto-fetch
+            document.getElementById('email').addEventListener('blur', (e) => attemptAutoSelectCustomer('email', e.target.value, false));
             
             // Network status listeners
             window.addEventListener('online', updateNetworkStatus);
@@ -691,6 +691,7 @@
             el.className = `status-box status-${type}`;
             el.classList.remove('hidden');
             if (type !== 'secondary') setTimeout(() => el.classList.add('hidden'), 5000);
+            window.scrollTo({ top: 0, behavior: 'smooth' });
         }
 
         /**
@@ -836,7 +837,7 @@
                 if (index !== -1) {
                     registrations[index] = entry; // Update local existing
                 } else {
-                    registrations.unshift(entry); // Save locally (fetched from cross-counter QR or Cloud)
+                    registrations.unshift(entry); // Save locally (fetched from cross-counter QR)
                 }
                 displayStatus(cloudSuccess ? `Updated & Synced: ${bookingId}` : `Updated Locally: ${bookingId}`, cloudSuccess ? 'success' : 'secondary');
             } else {
@@ -1097,16 +1098,29 @@
             saveDraft();
         }
 
-        async function attemptAutoSelectCustomer(type, val) {
+        let lastSearchedVal = "";
+
+        function handleMobileInput(val) {
+            // Automatically trigger search exactly when 10 digits are typed
+            if (val.length === 10 && val !== lastSearchedVal) {
+                attemptAutoSelectCustomer('mobile', val, false);
+            } else if (val.length < 10) {
+                lastSearchedVal = ""; // Reset so they can search again if they edit
+            }
+        }
+
+        async function attemptAutoSelectCustomer(type, val, force = false) {
             if (!val) {
-                displayStatus(`Please enter ${type} to search.`, "error");
+                if (force) displayStatus(`Please enter ${type} to search.`, "error");
                 return;
             }
             const currentCamp = document.getElementById('active-camp-code').value.trim();
-            const btnId = type === 'mobile' ? 'search-mobile-btn' : null;
-            const searchBtn = btnId ? document.getElementById(btnId) : null;
             
-            if(searchBtn) searchBtn.textContent = "⏳...";
+            if (type === 'mobile') {
+                if (!force && val === lastSearchedVal) return;
+                lastSearchedVal = val;
+            }
+            
             displayStatus(`Searching for ${val} in Camp: ${currentCamp}...`, "secondary");
 
             // 1. STRICT MAPPING: Search existing Local Registrations mapped to the current camp only
@@ -1118,7 +1132,6 @@
             if (localFound) {
                 loadRecordIntoForm(localFound);
                 displayStatus("Record found locally! Ready to mark Blood Collection.", "success");
-                if(searchBtn) searchBtn.textContent = "🔍 Search";
                 return;
             }
 
@@ -1135,7 +1148,6 @@
                         if (data && data.success && data.record) {
                             loadRecordIntoForm(data.record);
                             displayStatus("Record Auto-Fetched from Cloud Database!", "success");
-                            if(searchBtn) searchBtn.textContent = "🔍 Search";
                             return; 
                         }
                     } catch(e) {
@@ -1156,13 +1168,11 @@
                     document.getElementById('pre-select-customer').value = found.id; 
                     populateFormFromSelection(); 
                     displayStatus("Record found in Uploaded CSV Data.", "success");
-                    if(searchBtn) searchBtn.textContent = "🔍 Search";
                     return;
                 }
             }
             
             displayStatus("No pre-existing records found for this Camp. Please enter new details.", "error");
-            if(searchBtn) searchBtn.textContent = "🔍 Search";
         }
 
         // --- Scanner Logic ---
