@@ -670,6 +670,7 @@
         function applyCampCode(code) {
             document.getElementById('active-camp-code').value = code;
             document.getElementById('display-header-camp').textContent = code;
+            updateUI(); // Refresh UI to match the new camp code
         }
 
         function switchTab(evt, tabId) {
@@ -691,7 +692,8 @@
             el.className = `status-box status-${type}`;
             el.classList.remove('hidden');
             if (type !== 'secondary') setTimeout(() => el.classList.add('hidden'), 5000);
-            window.scrollTo({ top: 0, behavior: 'smooth' });
+            // Optional: Auto scroll not needed on blur events as it can be jarring
+            // window.scrollTo({ top: 0, behavior: 'smooth' }); 
         }
 
         /**
@@ -832,12 +834,12 @@
             if (cloudSuccess) entry.synced = true;
             
             if (existingId) {
-                // Update Mode
+                // Update Mode (handles both local updates AND saving offline cross-counter scans)
                 const index = registrations.findIndex(r => r.bookingId === bookingId);
                 if (index !== -1) {
                     registrations[index] = entry; // Update local existing
                 } else {
-                    registrations.unshift(entry); // Save locally (fetched from cross-counter QR)
+                    registrations.unshift(entry); // Save locally (fetched from cross-counter QR or Cloud)
                 }
                 displayStatus(cloudSuccess ? `Updated & Synced: ${bookingId}` : `Updated Locally: ${bookingId}`, cloudSuccess ? 'success' : 'secondary');
             } else {
@@ -910,18 +912,25 @@
         }
         
         function updateUI() {
-            const hasData = registrations.length > 0;
+            const currentCamp = document.getElementById('active-camp-code').value;
+            // STRICT MAPPING: Only show records that belong to the active camp code
+            const campRegistrations = registrations.filter(r => r.campCode === currentCamp);
+            const hasData = campRegistrations.length > 0;
+
             ['download-csv-btn', 'copy-csv-btn', 'clear-data-btn', 'view-csv-btn'].forEach(id => {
                 const el = document.getElementById(id);
                 if (el) el.disabled = !hasData;
             });
-            document.getElementById('expiration-info').textContent = `Local records: ${registrations.length}`;
+
+            document.getElementById('expiration-info').textContent = `Camp Records: ${campRegistrations.length} | Total Stored: ${registrations.length}`;
             const list = document.getElementById('registration-list');
+
             if (!hasData) {
-                list.innerHTML = '<p class="text-subtle italic text-center py-4">No local data found</p>';
+                list.innerHTML = `<p class="text-subtle italic text-center py-4">No records found for active camp: <b>${currentCamp || 'None'}</b></p>`;
                 return;
             }
-            list.innerHTML = registrations.map(reg => {
+
+            list.innerHTML = campRegistrations.map(reg => {
                 const displayId = reg.externalRclId ? reg.externalRclId : reg.bookingId;
                 return `
                 <div class="registration-item" style="flex-direction: column; gap: 0.5rem;">
@@ -950,8 +959,12 @@
 
         // --- Optimized Export Functions ---
         function generateCSVString() {
+            const currentCamp = document.getElementById('active-camp-code').value;
+            // Strict mapping: Only export records for the current camp
+            const campRegistrations = registrations.filter(r => r.campCode === currentCamp);
+            
             const headers = ["BookingID", "CampCode", "ExternalID", "Name", "Age", "Gender", "EmpID", "Mobile", "Email", "CollectionDate", "RegDateTime", "Phlebo", "Height", "Weight", "BP", "Pulse", "SpO2", "RBS", "Remarks", "VitalsStatus", "BloodStatus", "Synced"];
-            const csvRows = registrations.map(r => [
+            const csvRows = campRegistrations.map(r => [
                 r.bookingId, r.campCode, r.externalRclId, r.fullName, r.age, r.gender, r.empId, r.mobile, r.email, r.date, r.timestamp, 
                 getVitalValue(r, 'v_height'), getVitalValue(r, 'v_weight'), getVitalValue(r, 'v_bp'), getVitalValue(r, 'v_pulse'), 
                 getVitalValue(r, 'v_spo2'), getVitalValue(r, 'v_rbs'), r.remarks, r.vitalsStatus, r.bloodStatus, r.synced
@@ -961,7 +974,8 @@
 
         function downloadCSV() {
             const csvContent = generateCSVString();
-            const fileName = `redcliffe_export_${new Date().toISOString().split('T')[0]}.csv`;
+            const currentCamp = document.getElementById('active-camp-code').value || 'EXPORT';
+            const fileName = `redcliffe_${currentCamp}_${new Date().toISOString().split('T')[0]}.csv`;
             try {
                 const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
                 const url = URL.createObjectURL(blob);
@@ -1056,29 +1070,29 @@
             document.getElementById('full-name').value = localFound.fullName;
             document.getElementById('age').value = localFound.age;
             document.getElementById('gender').value = localFound.gender;
-            document.getElementById('employee-id').value = localFound.empId;
-            document.getElementById('email').value = localFound.email;
+            document.getElementById('employee-id').value = localFound.empId || '';
+            document.getElementById('email').value = localFound.email || '';
             document.getElementById('mobile-number').value = localFound.mobile;
-            document.getElementById('external-rcl-id').value = localFound.externalRclId;
-            document.getElementById('start-date').value = localFound.date;
-            document.getElementById('phlebo-name').value = localFound.phleboName;
+            document.getElementById('external-rcl-id').value = localFound.externalRclId || '';
+            document.getElementById('start-date').value = localFound.date || new Date().toISOString().split('T')[0];
+            document.getElementById('phlebo-name').value = localFound.phleboName || document.getElementById('phlebo-name').value;
             
             // Vitals
-            document.getElementById('v-height').value = localFound.v_height || '';
-            document.getElementById('v-weight').value = localFound.v_weight || '';
-            document.getElementById('v-bp').value = localFound.v_bp || '';
-            document.getElementById('v-pulse').value = localFound.v_pulse || '';
-            document.getElementById('v-spo2').value = localFound.v_spo2 || '';
-            document.getElementById('v-rbs').value = localFound.v_rbs || '';
+            document.getElementById('v-height').value = getVitalValue(localFound, 'v_height') || '';
+            document.getElementById('v-weight').value = getVitalValue(localFound, 'v_weight') || '';
+            document.getElementById('v-bp').value = getVitalValue(localFound, 'v_bp') || '';
+            document.getElementById('v-pulse').value = getVitalValue(localFound, 'v_pulse') || '';
+            document.getElementById('v-spo2').value = getVitalValue(localFound, 'v_spo2') || '';
+            document.getElementById('v-rbs').value = getVitalValue(localFound, 'v_rbs') || '';
             
             document.getElementById('remarks').value = localFound.remarks || '';
-            document.getElementById('blood-collected').checked = localFound.bloodCollected === true;
+            document.getElementById('blood-collected').checked = localFound.bloodCollected === true || localFound.bloodCollected === "true";
             
             // SET UPDATE TRACKER
             document.getElementById('existing-booking-id').value = localFound.bookingId;
             
             // Show vitals tab if data exists
-            if(localFound.v_bp || localFound.v_weight || localFound.v_rbs || localFound.v_height) {
+            if(document.getElementById('v-bp').value || document.getElementById('v-weight').value || document.getElementById('v-rbs').value || document.getElementById('v-height').value) {
                  document.getElementById('vitals-container').classList.remove('hidden');
                  document.getElementById('vitals-toggle-btn').textContent = 'Hide Vitals / माप छिपाएँ';
             }
@@ -1086,28 +1100,54 @@
             saveDraft();
         }
 
-        function attemptAutoSelectCustomer(type, val) {
+        async function attemptAutoSelectCustomer(type, val) {
             if (!val) return;
-            
-            // 1. Search existing Local Registrations first (For the Vitals -> Blood Desk workflow)
-            let localFound = registrations.find(x => type === 'mobile' ? x.mobile == val : x.email?.toLowerCase() === val.toLowerCase());
+            const currentCamp = document.getElementById('active-camp-code').value;
+
+            // 1. STRICT MAPPING: Search existing Local Registrations mapped to the current camp only
+            let localFound = registrations.find(x => x.campCode === currentCamp && (type === 'mobile' ? x.mobile == val : x.email?.toLowerCase() === val.toLowerCase()));
             
             if (localFound) {
                 loadRecordIntoForm(localFound);
-                displayStatus("Record found! Ready to mark Blood Collection.", "success");
+                displayStatus("Record found locally! Ready to mark Blood Collection.", "success");
                 return;
             }
 
-            // 2. Fallback to Pre-registered CSV
-            if (!preRegisteredCustomers.length) return;
-            let found = type === 'mobile' 
-                ? preRegisteredCustomers.find(x => x.mobile == val) 
-                : preRegisteredCustomers.find(x => x.email.toLowerCase() === val.toLowerCase());
+            displayStatus("Searching database...", "secondary");
 
-            if (found) { 
-                document.getElementById('pre-select-customer').value = found.id; 
-                populateFormFromSelection(); 
+            // 2. Fetch from Cloud Database (Google Sheets API)
+            // Requires the Google Apps Script to implement a doGet(e) function to search and return JSON.
+            try {
+                const searchUrl = `${SCRIPT_URL}?action=search&campCode=${encodeURIComponent(currentCamp)}&${type}=${encodeURIComponent(val)}`;
+                const response = await fetch(searchUrl); 
+                
+                if (response.ok) {
+                    const data = await response.json();
+                    if (data && data.success && data.record) {
+                        loadRecordIntoForm(data.record);
+                        displayStatus("Record Auto-Fetched from Cloud Database!", "success");
+                        return; // Stop here if found in cloud
+                    }
+                }
+            } catch (err) {
+                console.log("Cloud fetch attempted. Note: Backend Apps Script doGet() must be configured to return JSON for this feature.", err);
             }
+
+            // 3. Fallback to Pre-registered CSV database (these don't have camps, so we let them be used)
+            if (preRegisteredCustomers.length > 0) {
+                let found = type === 'mobile' 
+                    ? preRegisteredCustomers.find(x => x.mobile == val) 
+                    : preRegisteredCustomers.find(x => x.email?.toLowerCase() === val.toLowerCase());
+
+                if (found) { 
+                    document.getElementById('pre-select-customer').value = found.id; 
+                    populateFormFromSelection(); 
+                    displayStatus("Record found in Uploaded CSV Data.", "success");
+                    return;
+                }
+            }
+            
+            displayStatus("No pre-existing records found. Please enter details.", "secondary");
         }
 
         // --- Scanner Logic ---
@@ -1130,70 +1170,82 @@
             }
         }
 
+        // Helper fallback for old/plain text QR IDs
+        function handlePlainIdScan(textId, currentCamp) {
+            let localFound = registrations.find(x => x.campCode === currentCamp && (x.bookingId === textId || x.externalRclId === textId));
+            if (localFound) {
+                loadRecordIntoForm(localFound);
+                displayStatus("QR Scan Successful! Patient loaded locally.", "success");
+            } else {
+                // Check CSV pre-registrations as a final fallback
+                let csvFound = preRegisteredCustomers.find(x => x.externalRclId === textId || x.empId === textId);
+                if (csvFound) {
+                    document.getElementById('pre-select-customer').value = csvFound.id; 
+                    populateFormFromSelection();
+                    displayStatus("QR Scan Successful! Patient loaded from CSV.", "success");
+                } else {
+                    displayStatus("Error: Patient not found in this active camp.", "error");
+                }
+            }
+        }
+
         function onScanSuccess(decodedText, decodedResult) {
             closeScanner();
+            const currentCamp = document.getElementById('active-camp-code').value;
             
             try {
-                // 1. Try parsing the QR code text as JSON (New Offline-Transfer QR format)
-                const data = JSON.parse(decodedText);
-                
-                // 2. Validate Camp Code
-                const currentCamp = document.getElementById('active-camp-code').value;
-                if (data.c && data.c !== currentCamp) {
-                    displayStatus("Error: QR Code belongs to a different Camp (" + data.c + ").", "error");
-                    return;
-                }
-
-                // 3. Search local records first to see if we already have this patient
-                let localFound = registrations.find(x => x.bookingId === data.b);
-                
-                if (localFound) {
-                    loadRecordIntoForm(localFound);
-                    displayStatus("QR Scan Successful! Local record found.", "success");
-                } else {
-                    // 4. If not found locally, load the data perfectly mapped from the QR payload
-                    const mappedRecord = {
-                        bookingId: data.b,
-                        externalRclId: data.e,
-                        campCode: data.c,
-                        fullName: data.n,
-                        age: data.a,
-                        gender: data.g,
-                        mobile: data.m,
-                        empId: data.em || "",
-                        phleboName: data.p,
-                        email: "", date: new Date().toISOString().split('T')[0],
-                        v_height: data.vh || "", 
-                        v_weight: data.vw || "", 
-                        v_bp: data.vbp || "", 
-                        v_pulse: data.vp || "", 
-                        v_spo2: data.vo || "", 
-                        v_rbs: data.vr || "",
-                        remarks: "", bloodCollected: false
-                    };
-                    
-                    loadRecordIntoForm(mappedRecord);
-                    displayStatus("QR Scan Successful! Patient data fetched from QR.", "success");
+                let data = null;
+                // Safely check if the QR payload is our JSON format
+                if (decodedText.trim().startsWith('{') && decodedText.trim().endsWith('}')) {
+                    data = JSON.parse(decodedText);
                 }
                 
-            } catch (e) {
-                // Fallback for old QR codes (that only contain the ID string instead of JSON)
-                let localFound = registrations.find(x => x.bookingId === decodedText || x.externalRclId === decodedText);
-                
-                if (localFound) {
-                    loadRecordIntoForm(localFound);
-                    displayStatus("QR Scan Successful! Patient loaded locally.", "success");
-                } else {
-                    // Check CSV pre-registrations as a final fallback
-                    let csvFound = preRegisteredCustomers.find(x => x.externalRclId === decodedText || x.empId === decodedText);
-                    if (csvFound) {
-                        document.getElementById('pre-select-customer').value = csvFound.id; 
-                        populateFormFromSelection();
-                        displayStatus("QR Scan Successful! Patient loaded from CSV.", "success");
-                    } else {
-                        displayStatus("No matching local data found for this QR code.", "error");
+                if (data && data.c !== undefined) {
+                    // STRICT MAPPING: Validate Camp Code
+                    if (data.c !== currentCamp) {
+                        displayStatus("Validation Error: QR Code belongs to a different Camp (" + data.c + "). You are currently in " + currentCamp + ".", "error");
+                        return;
                     }
+
+                    // Search local records strictly mapped to this camp first
+                    let localFound = registrations.find(x => x.campCode === currentCamp && x.bookingId === data.b);
+                    
+                    if (localFound) {
+                        loadRecordIntoForm(localFound);
+                        displayStatus("QR Scan Successful! Local record found.", "success");
+                    } else {
+                        // CROSS-COUNTER OFFLINE SYNC: If not found locally, precisely map the data payload from the QR
+                        const mappedRecord = {
+                            bookingId: data.b,
+                            externalRclId: data.e,
+                            campCode: data.c,
+                            fullName: data.n,
+                            age: data.a,
+                            gender: data.g,
+                            mobile: data.m,
+                            empId: data.em || "",
+                            phleboName: data.p,
+                            email: "", date: new Date().toISOString().split('T')[0],
+                            v_height: data.vh || "", 
+                            v_weight: data.vw || "", 
+                            v_bp: data.vbp || "", 
+                            v_pulse: data.vp || "", 
+                            v_spo2: data.vo || "", 
+                            v_rbs: data.vr || "",
+                            remarks: "", bloodCollected: false
+                        };
+                        
+                        loadRecordIntoForm(mappedRecord);
+                        displayStatus("QR Scan Successful! Patient data fetched strictly via QR Code mapping.", "success");
+                    }
+                } else {
+                    // It's a plain string, likely an old simple ID barcode
+                    handlePlainIdScan(decodedText, currentCamp);
                 }
+            } catch (e) {
+                console.error("QR JSON Parse Error:", e);
+                // Fallback for old simple ID barcodes
+                handlePlainIdScan(decodedText, currentCamp);
             }
         }
 
