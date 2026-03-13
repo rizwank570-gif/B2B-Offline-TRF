@@ -419,9 +419,12 @@
                         <input type="text" id="employee-id" name="employee-id" placeholder="Optional / वैकल्पिक" class="input-field persist">
                     </div>
                     
-                    <div>
+                    <div class="span-2">
                         <label for="mobile-number">Mobile Number / मोबाइल नंबर *</label>
-                        <input type="tel" id="mobile-number" name="mobile-number" required pattern="[0-9]{10}" maxlength="10" title="Please enter a valid 10-digit mobile number" placeholder="10-digit number" class="input-field persist">
+                        <div style="display: flex; gap: 0.5rem;">
+                            <input type="tel" id="mobile-number" name="mobile-number" required pattern="[0-9]{10}" maxlength="10" title="Please enter a valid 10-digit mobile number" placeholder="10-digit number" class="input-field persist" style="flex: 1;">
+                            <button type="button" id="search-mobile-btn" class="btn-secondary" style="width: auto; padding: 0.5rem 1rem; background: #e0f2fe; border-color: #7dd3fc; color: #0369a1;" onclick="attemptAutoSelectCustomer('mobile', document.getElementById('mobile-number').value)">🔍 Search</button>
+                        </div>
                     </div>
 
                     <div>
@@ -559,10 +562,6 @@
             const persistInputs = document.querySelectorAll('.persist');
             persistInputs.forEach(input => input.addEventListener('input', saveDraft));
             
-            // Auto-fetch listeners
-            document.getElementById('mobile-number').addEventListener('blur', (e) => attemptAutoSelectCustomer('mobile', e.target.value));
-            document.getElementById('email').addEventListener('blur', (e) => attemptAutoSelectCustomer('email', e.target.value));
-            
             // Network status listeners
             window.addEventListener('online', updateNetworkStatus);
             window.addEventListener('offline', updateNetworkStatus);
@@ -692,8 +691,6 @@
             el.className = `status-box status-${type}`;
             el.classList.remove('hidden');
             if (type !== 'secondary') setTimeout(() => el.classList.add('hidden'), 5000);
-            // Optional: Auto scroll not needed on blur events as it can be jarring
-            // window.scrollTo({ top: 0, behavior: 'smooth' }); 
         }
 
         /**
@@ -914,7 +911,7 @@
         function updateUI() {
             const currentCamp = document.getElementById('active-camp-code').value;
             // STRICT MAPPING: Only show records that belong to the active camp code
-            const campRegistrations = registrations.filter(r => r.campCode === currentCamp);
+            const campRegistrations = registrations.filter(r => (r.campCode || "").trim().toLowerCase() === (currentCamp || "").trim().toLowerCase());
             const hasData = campRegistrations.length > 0;
 
             ['download-csv-btn', 'copy-csv-btn', 'clear-data-btn', 'view-csv-btn'].forEach(id => {
@@ -961,7 +958,7 @@
         function generateCSVString() {
             const currentCamp = document.getElementById('active-camp-code').value;
             // Strict mapping: Only export records for the current camp
-            const campRegistrations = registrations.filter(r => r.campCode === currentCamp);
+            const campRegistrations = registrations.filter(r => (r.campCode || "").trim().toLowerCase() === (currentCamp || "").trim().toLowerCase());
             
             const headers = ["BookingID", "CampCode", "ExternalID", "Name", "Age", "Gender", "EmpID", "Mobile", "Email", "CollectionDate", "RegDateTime", "Phlebo", "Height", "Weight", "BP", "Pulse", "SpO2", "RBS", "Remarks", "VitalsStatus", "BloodStatus", "Synced"];
             const csvRows = campRegistrations.map(r => [
@@ -1101,53 +1098,71 @@
         }
 
         async function attemptAutoSelectCustomer(type, val) {
-            if (!val) return;
-            const currentCamp = document.getElementById('active-camp-code').value;
+            if (!val) {
+                displayStatus(`Please enter ${type} to search.`, "error");
+                return;
+            }
+            const currentCamp = document.getElementById('active-camp-code').value.trim();
+            const btnId = type === 'mobile' ? 'search-mobile-btn' : null;
+            const searchBtn = btnId ? document.getElementById(btnId) : null;
+            
+            if(searchBtn) searchBtn.textContent = "⏳...";
+            displayStatus(`Searching for ${val} in Camp: ${currentCamp}...`, "secondary");
 
             // 1. STRICT MAPPING: Search existing Local Registrations mapped to the current camp only
-            let localFound = registrations.find(x => x.campCode === currentCamp && (type === 'mobile' ? x.mobile == val : x.email?.toLowerCase() === val.toLowerCase()));
+            let localFound = registrations.find(x => 
+                (x.campCode || "").trim().toLowerCase() === currentCamp.toLowerCase() && 
+                (type === 'mobile' ? x.mobile === val.trim() : (x.email || "").toLowerCase() === val.trim().toLowerCase())
+            );
             
             if (localFound) {
                 loadRecordIntoForm(localFound);
                 displayStatus("Record found locally! Ready to mark Blood Collection.", "success");
+                if(searchBtn) searchBtn.textContent = "🔍 Search";
                 return;
             }
-
-            displayStatus("Searching database...", "secondary");
 
             // 2. Fetch from Cloud Database (Google Sheets API)
             // Requires the Google Apps Script to implement a doGet(e) function to search and return JSON.
             try {
-                const searchUrl = `${SCRIPT_URL}?action=search&campCode=${encodeURIComponent(currentCamp)}&${type}=${encodeURIComponent(val)}`;
+                const searchUrl = `${SCRIPT_URL}?action=search&campCode=${encodeURIComponent(currentCamp)}&${type}=${encodeURIComponent(val.trim())}`;
                 const response = await fetch(searchUrl); 
                 
                 if (response.ok) {
-                    const data = await response.json();
-                    if (data && data.success && data.record) {
-                        loadRecordIntoForm(data.record);
-                        displayStatus("Record Auto-Fetched from Cloud Database!", "success");
-                        return; // Stop here if found in cloud
+                    const text = await response.text();
+                    try {
+                        const data = JSON.parse(text);
+                        if (data && data.success && data.record) {
+                            loadRecordIntoForm(data.record);
+                            displayStatus("Record Auto-Fetched from Cloud Database!", "success");
+                            if(searchBtn) searchBtn.textContent = "🔍 Search";
+                            return; 
+                        }
+                    } catch(e) {
+                        console.warn("Cloud response was not JSON. Backend Google Apps Script needs a doGet(e) method returning JSON.", text);
                     }
                 }
             } catch (err) {
-                console.log("Cloud fetch attempted. Note: Backend Apps Script doGet() must be configured to return JSON for this feature.", err);
+                console.error("Cloud fetch failed. Backend Apps Script doGet() must be configured with CORS.", err);
             }
 
             // 3. Fallback to Pre-registered CSV database (these don't have camps, so we let them be used)
             if (preRegisteredCustomers.length > 0) {
                 let found = type === 'mobile' 
-                    ? preRegisteredCustomers.find(x => x.mobile == val) 
-                    : preRegisteredCustomers.find(x => x.email?.toLowerCase() === val.toLowerCase());
+                    ? preRegisteredCustomers.find(x => x.mobile === val.trim()) 
+                    : preRegisteredCustomers.find(x => (x.email || "").toLowerCase() === val.trim().toLowerCase());
 
                 if (found) { 
                     document.getElementById('pre-select-customer').value = found.id; 
                     populateFormFromSelection(); 
                     displayStatus("Record found in Uploaded CSV Data.", "success");
+                    if(searchBtn) searchBtn.textContent = "🔍 Search";
                     return;
                 }
             }
             
-            displayStatus("No pre-existing records found. Please enter details.", "secondary");
+            displayStatus("No pre-existing records found for this Camp. Please enter new details.", "error");
+            if(searchBtn) searchBtn.textContent = "🔍 Search";
         }
 
         // --- Scanner Logic ---
@@ -1172,7 +1187,7 @@
 
         // Helper fallback for old/plain text QR IDs
         function handlePlainIdScan(textId, currentCamp) {
-            let localFound = registrations.find(x => x.campCode === currentCamp && (x.bookingId === textId || x.externalRclId === textId));
+            let localFound = registrations.find(x => (x.campCode || "").trim().toLowerCase() === (currentCamp || "").trim().toLowerCase() && (x.bookingId === textId || x.externalRclId === textId));
             if (localFound) {
                 loadRecordIntoForm(localFound);
                 displayStatus("QR Scan Successful! Patient loaded locally.", "success");
@@ -1191,7 +1206,7 @@
 
         function onScanSuccess(decodedText, decodedResult) {
             closeScanner();
-            const currentCamp = document.getElementById('active-camp-code').value;
+            const currentCamp = document.getElementById('active-camp-code').value.trim();
             
             try {
                 let data = null;
@@ -1202,13 +1217,13 @@
                 
                 if (data && data.c !== undefined) {
                     // STRICT MAPPING: Validate Camp Code
-                    if (data.c !== currentCamp) {
+                    if ((data.c || "").trim().toLowerCase() !== currentCamp.toLowerCase()) {
                         displayStatus("Validation Error: QR Code belongs to a different Camp (" + data.c + "). You are currently in " + currentCamp + ".", "error");
                         return;
                     }
 
                     // Search local records strictly mapped to this camp first
-                    let localFound = registrations.find(x => x.campCode === currentCamp && x.bookingId === data.b);
+                    let localFound = registrations.find(x => (x.campCode || "").trim().toLowerCase() === currentCamp.toLowerCase() && x.bookingId === data.b);
                     
                     if (localFound) {
                         loadRecordIntoForm(localFound);
