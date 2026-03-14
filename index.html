@@ -346,6 +346,10 @@
             border: 1px solid var(--border);
             background: #fff;
             min-height: 250px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-direction: column;
         }
         #qr-reader video {
             border-radius: 0.5rem;
@@ -1381,53 +1385,52 @@
                 titleText.innerHTML = mode === 'tube' ? 'Scan Tube Barcode' : 'Scan Patient QR';
             }
 
+            // BLACK SCREEN FIX: Show loading message before camera mounts
+            const qrReader = document.getElementById('qr-reader');
+            qrReader.innerHTML = '<div style="padding: 3rem 1rem; text-align: center; color: var(--text-muted); font-weight: 500;">Camera chalu ho raha hai...<br><small>Kripya pratiksha karein</small></div>';
+
             document.getElementById('scanner-modal-overlay').classList.remove('hidden');
             
-            setTimeout(() => {
-                if (!window.html5QrCode) {
-                    window.html5QrCode = new Html5Qrcode("qr-reader");
-                }
-                
-                const scanConfig = { fps: 10, qrbox: { width: 250, height: 250 } };
+            if (!window.html5QrCode) {
+                window.html5QrCode = new Html5Qrcode("qr-reader");
+            }
+            
+            const scanConfig = { fps: 10, qrbox: { width: 250, height: 250 } };
 
-                // 1. Pehle user se permission mangein aur devices detect karein
-                Html5Qrcode.getCameras().then(devices => {
-                    if (devices && devices.length) {
-                        let backCameraId = devices[0].id;
-                        
-                        // 2. specifically pichla (rear) camera dhundhein
-                        for (let i = 0; i < devices.length; i++) {
-                            if (devices[i].label.toLowerCase().includes("back") || 
-                                devices[i].label.toLowerCase().includes("rear") ||
-                                devices[i].label.toLowerCase().includes("environment")) {
-                                backCameraId = devices[i].id;
-                                break;
-                            }
+            Html5Qrcode.getCameras().then(devices => {
+                if (devices && devices.length) {
+                    let backCameraId = devices[0].id;
+                    
+                    // Rear camera search karein
+                    for (let i = 0; i < devices.length; i++) {
+                        if (devices[i].label.toLowerCase().includes("back") || 
+                            devices[i].label.toLowerCase().includes("rear") ||
+                            devices[i].label.toLowerCase().includes("environment")) {
+                            backCameraId = devices[i].id;
+                            break;
                         }
-                        
-                        // 3. Exact Back Camera open karein
-                        window.html5QrCode.start(backCameraId, scanConfig, onScanSuccess, onScanFailure)
-                        .catch(err => {
-                            displayStatus("Camera chalu karne mein dikkat aayi.", "error");
-                            closeScanner();
-                        });
-                    } else {
-                        // Agar list empty mile toh directly environment mode force karein
-                        window.html5QrCode.start({ facingMode: "environment" }, scanConfig, onScanSuccess, onScanFailure)
-                        .catch(e => {
-                            displayStatus("Koi camera nahi mila.", "error");
-                            closeScanner();
-                        });
                     }
-                }).catch(err => {
-                    // Agar permission check fail ho jaye, toh directly try karein
-                    window.html5QrCode.start({ facingMode: "environment" }, scanConfig, onScanSuccess, onScanFailure)
-                    .catch(e => {
-                        displayStatus("Camera permission allow karein.", "error");
+                    
+                    // Seedha back camera start karein (bina setTimeout ke delay ke)
+                    window.html5QrCode.start(backCameraId, scanConfig, onScanSuccess, onScanFailure)
+                    .catch(err => {
+                        displayStatus("Camera chalu karne mein dikkat aayi.", "error");
                         closeScanner();
                     });
+                } else {
+                    window.html5QrCode.start({ facingMode: "environment" }, scanConfig, onScanSuccess, onScanFailure)
+                    .catch(e => {
+                        displayStatus("Koi camera nahi mila.", "error");
+                        closeScanner();
+                    });
+                }
+            }).catch(err => {
+                window.html5QrCode.start({ facingMode: "environment" }, scanConfig, onScanSuccess, onScanFailure)
+                .catch(e => {
+                    displayStatus("Camera permission allow karein.", "error");
+                    closeScanner();
                 });
-            }, 300);
+            });
         }
 
         function closeScanner() {
@@ -1500,7 +1503,7 @@
             button.textContent = container.classList.contains('hidden') ? 'Expand Vitals' : 'Hide Vitals';
         }
 
-        // --- WHATSAPP SHARE NATIVE ---
+        // --- WHATSAPP SHARE FIX (DIRECT NUMBER TARGET) ---
         function shareWhatsApp(id) {
             const reg = registrations.find(r => r.id === id);
             if (!reg || !reg.mobile) {
@@ -1508,10 +1511,7 @@
                 return;
             }
             
-            let waWindow = window.open('', '_blank');
-            waWindow.document.write('<h3 style="font-family:sans-serif; text-align:center; margin-top:20%; color: #2563eb;">Generating Receipt Image...<br><br>Opening WhatsApp...</h3>');
-            
-            displayStatus("Generating receipt for sharing...", "secondary");
+            displayStatus("Receipt ban rahi hai...", "secondary");
 
             const printArea = document.getElementById('receipt-print-area');
             const genderHin = reg.gender === 'male' ? 'Male' : (reg.gender === 'female' ? 'Female' : 'Other');
@@ -1562,59 +1562,36 @@
                 html2canvas(printArea, { scale: 3, backgroundColor: "#ffffff" }).then(canvas => {
                     printArea.style.display = 'none';
                     
-                    canvas.toBlob(async blob => {
+                    canvas.toBlob(blob => {
                         const fileName = `Receipt_${displayId}.png`;
-                        const file = new File([blob], fileName, { type: 'image/png' });
+                        const url = window.URL.createObjectURL(blob);
+                        
+                        // Auto Download receipt image
+                        const a = document.createElement('a');
+                        a.style.display = 'none';
+                        a.href = url;
+                        a.download = fileName;
+                        document.body.appendChild(a);
+                        a.click();
+                        setTimeout(() => window.URL.revokeObjectURL(url), 2000);
+                        
+                        // Format WA link and open directly
+                        let mobileNumber = reg.mobile.replace(/\D/g, '');
+                        if (mobileNumber.length === 10) mobileNumber = '91' + mobileNumber;
                         
                         const message = `Namaste ${reg.fullName},\n\nAapka Redcliffe Labs ka registration safal raha. Kripya apni details check karein.\n\n*(Kripya abhi download hui receipt ki photo yahan attach karein)*`;
+                        const whatsappUrl = `https://wa.me/${mobileNumber}?text=${encodeURIComponent(message)}`;
                         
-                        // TRY NATIVE WEB SHARE API FIRST (Works smoothly on Mobile)
-                        if (navigator.canShare && navigator.canShare({ files: [file] })) {
-                            try {
-                                await navigator.share({
-                                    files: [file],
-                                    title: 'Registration Receipt',
-                                    text: message
-                                });
-                                displayStatus("Receipt shared successfully!", "success");
-                                waWindow.close();
-                            } catch (error) {
-                                console.error("Share failed/cancelled:", error);
-                                if (error.name !== 'AbortError') {
-                                    displayStatus("Share cancelled or failed.", "warning");
-                                }
-                                waWindow.close();
-                            }
-                        } else {
-                            // DESKTOP FALLBACK (Download image and open WhatsApp Web with number)
-                            const url = window.URL.createObjectURL(blob);
-                            
-                            const a = document.createElement('a');
-                            a.style.display = 'none';
-                            a.href = url;
-                            a.download = fileName;
-                            document.body.appendChild(a);
-                            a.click();
-                            window.URL.revokeObjectURL(url);
-                            
-                            let mobileNumber = reg.mobile.replace(/\D/g, '');
-                            if (mobileNumber.length === 10) mobileNumber = '91' + mobileNumber;
-                            
-                            const whatsappUrl = `https://wa.me/${mobileNumber}?text=${encodeURIComponent(message)}`;
-                            
-                            displayStatus("Receipt downloaded! Opening WhatsApp...", "success");
-                            
-                            waWindow.location.href = whatsappUrl;
-                        }
+                        displayStatus("Receipt download ho gayi! WhatsApp khul raha hai...", "success");
+                        window.open(whatsappUrl, '_blank');
 
                     }, 'image/png');
                 }).catch(err => {
                     console.error("Html2Canvas Error: ", err);
                     displayStatus("Failed to generate receipt image.", "error");
                     printArea.style.display = 'none';
-                    waWindow.close();
                 });
-            }, 300);
+            }, 300); // UI render delay
         }
 
         // --- PRINT ---
