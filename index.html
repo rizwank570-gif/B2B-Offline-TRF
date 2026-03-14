@@ -366,7 +366,7 @@
         @media print {
             @page {
                 margin: 0;
-                size: 58mm auto; /* Specific to thermal printers */
+                size: 58mm auto;
             }
             html, body {
                 background: white;
@@ -374,11 +374,9 @@
                 padding: 0;
                 width: 58mm;
             }
-            /* Hide ALL UI elements to completely eliminate blank pages */
             .no-print { 
                 display: none !important; 
             }
-            /* Show ONLY the receipt and format for thermal roll */
             #receipt-print-area { 
                 display: block !important;
                 position: static !important;
@@ -391,7 +389,6 @@
             }
         }
 
-        /* Utilities */
         .text-center { text-align: center; }
         .mt-4 { margin-top: 1rem; }
     </style>
@@ -670,6 +667,20 @@
         let currentModalCallback = null;
         let scanMode = 'patient'; 
 
+        // --- GOOGLE SCRIPT NATIVE API WRAPPER ---
+        function runGoogleScript(method, ...args) {
+            return new Promise((resolve, reject) => {
+                if (typeof google !== 'undefined' && google.script) {
+                    google.script.run
+                        .withSuccessHandler(res => resolve(JSON.parse(res)))
+                        .withFailureHandler(err => reject(err))
+                        [method](...args);
+                } else {
+                    reject(new Error("google.script.run natively not available here. Will fallback to fetch."));
+                }
+            });
+        }
+
         // Custom action for Blood check toggle -> forces tube scan
         function toggleBloodAction(e) {
             if (e) e.preventDefault();
@@ -857,19 +868,26 @@
             return "";
         }
 
-        // --- CLOUD SYNC OPERATIONS (FETCH BASED FOR GITHUB PAGES) ---
+        // --- CLOUD SYNC OPERATIONS ---
         async function syncRecordToCloud(entry) {
-            if (typeof SCRIPT_URL === 'undefined' || !SCRIPT_URL.includes('script.google.com')) return false;
             try {
-                const response = await fetch(SCRIPT_URL, {
-                    method: 'POST',
-                    mode: 'no-cors',
-                    cache: 'no-cache',
-                    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-                    body: JSON.stringify(entry)
-                });
-                return true; 
-            } catch (err) { return false; }
+                // Method 1: Google Script Native (Fastest)
+                const data = await runGoogleScript('syncRecordBackend', JSON.stringify(entry));
+                return data.success;
+            } catch (e) {
+                // Method 2: Standard Fetch Fallback (For Github Pages)
+                if (typeof SCRIPT_URL !== 'undefined' && SCRIPT_URL.includes('script.google.com')) {
+                    try {
+                        const response = await fetch(SCRIPT_URL, {
+                            method: 'POST', mode: 'no-cors', cache: 'no-cache',
+                            headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+                            body: JSON.stringify(entry)
+                        });
+                        return true; 
+                    } catch (err) { return false; }
+                }
+                return false;
+            }
         }
 
         async function syncAllRecords() {
@@ -1016,8 +1034,12 @@
                 }
             };
 
-            // Using FETCH for GitHub Pages compatibility
-            if (typeof SCRIPT_URL !== 'undefined' && SCRIPT_URL.includes('script.google.com')) {
+            try {
+                // Method 1: NATIVE FETCH (Fastest)
+                const data = await runGoogleScript('getCampDataBackend', currentCamp);
+                processCloudData(data);
+            } catch(e) {
+                // Method 2: FALLBACK HTTP FETCH
                 try {
                     const response = await fetch(`${SCRIPT_URL}?action=getCampData&campCode=${encodeURIComponent(currentCamp)}&t=${Date.now()}`); 
                     if (response.ok) {
@@ -1321,18 +1343,21 @@
                 return false;
             };
 
-            // Using FETCH for GitHub Pages compatibility
-            if (typeof SCRIPT_URL !== 'undefined' && SCRIPT_URL.includes('script.google.com')) {
-                try {
-                    const response = await fetch(`${SCRIPT_URL}?action=search&campCode=${encodeURIComponent(currentCamp)}&${type}=${encodeURIComponent(val.trim())}&t=${Date.now()}`); 
-                    if (response.ok) {
-                        const data = JSON.parse(await response.text());
-                        if (processSearchData(data)) return;
-                    }
-                } catch (err) { console.warn("AppScript fetch failed.", err); }
+            try {
+                const data = await runGoogleScript('searchBackend', currentCamp, type, val.trim());
+                if (processSearchData(data)) return;
+            } catch(e) {
+                if (typeof SCRIPT_URL !== 'undefined' && SCRIPT_URL.includes('script.google.com')) {
+                    try {
+                        const response = await fetch(`${SCRIPT_URL}?action=search&campCode=${encodeURIComponent(currentCamp)}&${type}=${encodeURIComponent(val.trim())}&t=${Date.now()}`); 
+                        if (response.ok) {
+                            const data = JSON.parse(await response.text());
+                            if (processSearchData(data)) return;
+                        }
+                    } catch (err) { console.warn("AppScript fetch failed.", err); }
+                }
             }
 
-            // Fallback to CSV pre-registrations
             if (preRegisteredCustomers.length > 0) {
                 let found = type === 'mobile' ? preRegisteredCustomers.find(x => x.mobile === val.trim()) : preRegisteredCustomers.find(x => (x.email || "").toLowerCase() === val.trim().toLowerCase());
                 if (found) { 
@@ -1347,11 +1372,10 @@
             if(searchBtn) searchBtn.textContent = "Search";
         }
 
-        // --- SCANNER ---
+        // --- SCANNER ROBUST CAMERA FIX ---
         function openScanner(mode = 'patient') {
-            scanMode = mode; // Store what we are scanning for
+            scanMode = mode;
 
-            // Update UI text based on scan mode
             const titleText = document.getElementById('scanner-title-text');
             if (titleText) {
                 titleText.innerHTML = mode === 'tube' ? 'Scan Tube Barcode' : 'Scan Patient QR';
@@ -1360,30 +1384,46 @@
             document.getElementById('scanner-modal-overlay').classList.remove('hidden');
             
             setTimeout(() => {
-                if (!html5QrCode) {
-                    html5QrCode = new Html5Qrcode("qr-reader");
+                if (!window.html5QrCode) {
+                    window.html5QrCode = new Html5Qrcode("qr-reader");
                 }
                 
                 const scanConfig = { fps: 10, qrbox: { width: 250, height: 250 } };
 
-                // Attempt to start with environment camera ideally
-                html5QrCode.start(
-                    { facingMode: { ideal: "environment" } }, 
-                    scanConfig,
-                    onScanSuccess,
-                    onScanFailure
-                ).catch((err) => {
-                    console.warn("Ideal camera failed, trying explicit fallback...", err);
-                    
-                    // Explicit fallback for desktops/laptops without environment cameras
-                    html5QrCode.start(
-                        { facingMode: "user" }, 
-                        scanConfig,
-                        onScanSuccess,
-                        onScanFailure
-                    ).catch((fallbackErr) => {
-                        console.error("Camera Error:", fallbackErr);
-                        displayStatus("Camera blocked or not found. Please allow camera permissions in your browser.", "error");
+                // 1. Pehle user se permission mangein aur devices detect karein
+                Html5Qrcode.getCameras().then(devices => {
+                    if (devices && devices.length) {
+                        let backCameraId = devices[0].id;
+                        
+                        // 2. specifically pichla (rear) camera dhundhein
+                        for (let i = 0; i < devices.length; i++) {
+                            if (devices[i].label.toLowerCase().includes("back") || 
+                                devices[i].label.toLowerCase().includes("rear") ||
+                                devices[i].label.toLowerCase().includes("environment")) {
+                                backCameraId = devices[i].id;
+                                break;
+                            }
+                        }
+                        
+                        // 3. Exact Back Camera open karein
+                        window.html5QrCode.start(backCameraId, scanConfig, onScanSuccess, onScanFailure)
+                        .catch(err => {
+                            displayStatus("Camera chalu karne mein dikkat aayi.", "error");
+                            closeScanner();
+                        });
+                    } else {
+                        // Agar list empty mile toh directly environment mode force karein
+                        window.html5QrCode.start({ facingMode: "environment" }, scanConfig, onScanSuccess, onScanFailure)
+                        .catch(e => {
+                            displayStatus("Koi camera nahi mila.", "error");
+                            closeScanner();
+                        });
+                    }
+                }).catch(err => {
+                    // Agar permission check fail ho jaye, toh directly try karein
+                    window.html5QrCode.start({ facingMode: "environment" }, scanConfig, onScanSuccess, onScanFailure)
+                    .catch(e => {
+                        displayStatus("Camera permission allow karein.", "error");
                         closeScanner();
                     });
                 });
@@ -1392,9 +1432,9 @@
 
         function closeScanner() {
             document.getElementById('scanner-modal-overlay').classList.add('hidden');
-            if (html5QrCode && html5QrCode.isScanning) {
-                html5QrCode.stop().then(() => {
-                    html5QrCode.clear();
+            if (window.html5QrCode && window.html5QrCode.isScanning) {
+                window.html5QrCode.stop().then(() => {
+                    window.html5QrCode.clear();
                 }).catch(err => console.log(err));
             }
         }
@@ -1414,7 +1454,6 @@
         function onScanSuccess(decodedText, decodedResult) {
             closeScanner();
 
-            // Check if we are scanning for a Tube Barcode
             if (scanMode === 'tube') {
                 document.getElementById('tube-barcode').value = decodedText;
                 document.getElementById('blood-collected').checked = true;
@@ -1424,7 +1463,6 @@
                 return;
             }
 
-            // Otherwise, we are scanning for a Patient QR
             const currentCamp = document.getElementById('active-camp-code').value.trim();
             try {
                 let data = null;
@@ -1470,7 +1508,6 @@
                 return;
             }
             
-            // Open window immediately to bypass popup blockers
             let waWindow = window.open('', '_blank');
             waWindow.document.write('<h3 style="font-family:sans-serif; text-align:center; margin-top:20%; color: #2563eb;">Generating Receipt Image...<br><br>Opening WhatsApp...</h3>');
             
@@ -1480,7 +1517,6 @@
             const genderHin = reg.gender === 'male' ? 'Male' : (reg.gender === 'female' ? 'Female' : 'Other');
             const displayId = reg.externalRclId || reg.bookingId;
             
-            // Build the receipt layout exactly as it looks in print
             printArea.innerHTML = `
                 <div class="receipt-header"><strong>REDCLIFFE LABS</strong><br>Registration Receipt</div>
                 <div class="receipt-id">${displayId}</div>
@@ -1497,6 +1533,8 @@
                 <div class="receipt-row" style="margin-top: 4px;"><span>Vitals:</span> <strong>${reg.vitalsStatus || 'Pending'}</strong></div>
                 <div class="receipt-row"><span>Blood:</span> <strong>${reg.bloodCollected ? 'Completed' : 'Pending'}</strong></div>
                 ${reg.tubeBarcode ? `<div class="receipt-row"><span>Tube ID:</span> <strong>${reg.tubeBarcode}</strong></div>` : ''}
+                <div class="receipt-row"><span>Reg Phlebo:</span> <span>${reg.phleboName || '--'}</span></div>
+                ${reg.bloodPhleboName ? `<div class="receipt-row"><span>Blood Phlebo:</span> <span>${reg.bloodPhleboName}</span></div>` : ''}
                 <div class="receipt-row" style="margin-top: 4px; flex-direction: column;">
                     <span>Remarks:</span>
                     <span style="font-size: 9px; margin-top: 2px;">${reg.remarks || 'None'}</span>
@@ -1515,7 +1553,6 @@
                 text: qrData, width: 140, height: 140, colorDark : "#000000", colorLight : "#ffffff", correctLevel : QRCode.CorrectLevel.L
             });
 
-            // Wait for QR code to render, then take screenshot
             setTimeout(() => {
                 printArea.style.display = 'block';
                 printArea.style.position = 'absolute';
@@ -1529,7 +1566,7 @@
                         const fileName = `Receipt_${displayId}.png`;
                         const file = new File([blob], fileName, { type: 'image/png' });
                         
-                        const message = `Namaste ${reg.fullName},\n\nAapka Redcliffe Labs ka registration safal raha. Kripya apni details check karein.`;
+                        const message = `Namaste ${reg.fullName},\n\nAapka Redcliffe Labs ka registration safal raha. Kripya apni details check karein.\n\n*(Kripya abhi download hui receipt ki photo yahan attach karein)*`;
                         
                         // TRY NATIVE WEB SHARE API FIRST (Works smoothly on Mobile)
                         if (navigator.canShare && navigator.canShare({ files: [file] })) {
@@ -1552,7 +1589,6 @@
                             // DESKTOP FALLBACK (Download image and open WhatsApp Web with number)
                             const url = window.URL.createObjectURL(blob);
                             
-                            // Always Download the image first
                             const a = document.createElement('a');
                             a.style.display = 'none';
                             a.href = url;
@@ -1561,16 +1597,13 @@
                             a.click();
                             window.URL.revokeObjectURL(url);
                             
-                            // Format the direct specific chat WhatsApp URL using patient number
                             let mobileNumber = reg.mobile.replace(/\D/g, '');
                             if (mobileNumber.length === 10) mobileNumber = '91' + mobileNumber;
                             
-                            const fallbackMessage = `${message}\n\n*(Kripya abhi download hui receipt ki photo yahan attach karein)*`;
-                            const whatsappUrl = `https://wa.me/${mobileNumber}?text=${encodeURIComponent(fallbackMessage)}`;
+                            const whatsappUrl = `https://wa.me/${mobileNumber}?text=${encodeURIComponent(message)}`;
                             
                             displayStatus("Receipt downloaded! Opening WhatsApp...", "success");
                             
-                            // Redirect to the specific chat
                             waWindow.location.href = whatsappUrl;
                         }
 
@@ -1639,7 +1672,6 @@
                     updateUI();
                     displayStatus("Saara local data clear kar diya gaya hai.", "success");
                     
-                    // Reset hone ke baad automatically wapas Camp Code setup screen khol dein
                     setTimeout(() => {
                         openCampSetup();
                     }, 500);
