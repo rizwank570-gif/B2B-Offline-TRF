@@ -208,7 +208,7 @@
         .input-field::placeholder { color: #94a3b8; }
         select.input-field { cursor: pointer; appearance: none; background-image: url("data:image/svg+xml;charset=US-ASCII,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%22292.4%22%20height%3D%22292.4%22%3E%3Cpath%20fill%3D%22%2394a3b8%22%20d%3D%22M287%2069.4a17.6%2017.6%200%200%200-13-5.4H18.4c-5%200-9.3%201.8-12.9%205.4A17.6%2017.6%200%200%200%200%2082.2c0%205%201.8%209.3%205.4%2012.9l128%20127.9c3.6%203.6%207.8%205.4%2012.8%205.4s9.2-1.8%2012.8-5.4L287%2095c3.5-3.5%205.4-7.8%205.4-12.8%200-5-1.9-9.2-5.5-12.8z%22%2F%3E%3C%2Fsvg%3E"); background-repeat: no-repeat; background-position: right 1rem top 50%; background-size: 0.65rem auto; }
 
-        /* Input with attached button (Search) */
+        /* Input with attached button (Search/Scan) */
         .input-with-btn { display: flex; }
         .input-with-btn .input-field { border-top-right-radius: 0; border-bottom-right-radius: 0; border-right: 0; }
         .input-with-btn .btn-attached {
@@ -505,7 +505,6 @@
                 <!-- Hidden Fields -->
                 <input type="hidden" id="active-camp-code" name="camp-code">
                 <input type="hidden" id="existing-booking-id" name="existing-booking-id">
-                <input type="hidden" id="tube-barcode" name="tube-barcode" class="persist">
 
                 <div class="section-header">
                     <span>Personal Details</span>
@@ -591,12 +590,24 @@
                     <textarea id="remarks" name="remarks" rows="2" class="input-field persist" placeholder="Any special observations..."></textarea>
                 </div>
 
-                <!-- Big Interactive Toggle with Tube Barcode Display -->
-                <div class="status-toggle" id="blood-toggle-container" onclick="toggleBloodAction(event)">
-                    <input type="checkbox" id="blood-collected" name="blood-collected" class="persist" style="pointer-events: none;">
+                <!-- NEW UX: Normal Toggle Checkbox without auto-camera -->
+                <div class="status-toggle" id="blood-toggle-container" onclick="document.getElementById('blood-collected').click();">
+                    <input type="checkbox" id="blood-collected" name="blood-collected" class="persist" onclick="event.stopPropagation(); syncToggleVisual();">
                     <div style="display: flex; flex-direction: column;">
-                        <label style="pointer-events: none; cursor: pointer;">Blood Collection Completed</label>
-                        <span id="tube-barcode-display" style="font-size: 0.9rem; font-weight: 700; margin-top: 0.2rem; display: none;"></span>
+                        <label style="cursor: pointer;">Blood Collection Completed</label>
+                    </div>
+                </div>
+
+                <!-- Dedicated Tube Barcode Section (Appears when blood is checked) -->
+                <div id="tube-barcode-container" class="hidden" style="margin-top: 1rem; padding: 1rem; background: var(--background); border-radius: var(--radius-md); border: 1px solid var(--border);">
+                    <div class="input-group">
+                        <label for="tube-barcode">Tube Barcode (Optional)</label>
+                        <div class="input-with-btn">
+                            <input type="text" id="tube-barcode" name="tube-barcode" placeholder="Enter barcode or scan" class="input-field persist">
+                            <button type="button" class="btn-attached" onclick="openScanner('tube')" style="background: var(--secondary-light); color: var(--secondary); border-color: #cbd5e1;">
+                                📷 Scan
+                            </button>
+                        </div>
                     </div>
                 </div>
 
@@ -685,38 +696,19 @@
             });
         }
 
-        // Custom action for Blood check toggle -> forces tube scan
-        function toggleBloodAction(e) {
-            if (e) e.preventDefault();
-            const cb = document.getElementById('blood-collected');
-            if (!cb.checked) {
-                openScanner('tube');
-            } else {
-                cb.checked = false;
-                document.getElementById('tube-barcode').value = '';
-                syncToggleVisual();
-                saveDraft();
-            }
-        }
-
+        // New Logic: Checkbox just toggles visual states
         function syncToggleVisual() {
             const cb = document.getElementById('blood-collected');
             const container = document.getElementById('blood-toggle-container');
-            const tubeDisplay = document.getElementById('tube-barcode-display');
-            const tubeVal = document.getElementById('tube-barcode').value;
+            const tubeBox = document.getElementById('tube-barcode-container');
 
             if (cb.checked) {
                 container.classList.add('active');
-                if (tubeVal) {
-                    tubeDisplay.textContent = "🧪 Tube ID: " + tubeVal;
-                    tubeDisplay.style.display = "block";
-                    tubeDisplay.style.color = "var(--success-text)";
-                } else {
-                    tubeDisplay.style.display = "none";
-                }
+                tubeBox.classList.remove('hidden'); // Show optional barcode scan
             } else {
                 container.classList.remove('active');
-                tubeDisplay.style.display = "none";
+                tubeBox.classList.add('hidden'); // Hide barcode scan
+                document.getElementById('tube-barcode').value = ''; // clear value if unchecked
             }
         }
 
@@ -1385,7 +1377,6 @@
                 titleText.innerHTML = mode === 'tube' ? 'Scan Tube Barcode' : 'Scan Patient QR';
             }
 
-            // BLACK SCREEN FIX: Show loading message before camera mounts
             const qrReader = document.getElementById('qr-reader');
             qrReader.innerHTML = '<div style="padding: 3rem 1rem; text-align: center; color: var(--text-muted); font-weight: 500;">Camera chalu ho raha hai...<br><small>Kripya pratiksha karein</small></div>';
 
@@ -1400,8 +1391,6 @@
             Html5Qrcode.getCameras().then(devices => {
                 if (devices && devices.length) {
                     let backCameraId = devices[0].id;
-                    
-                    // Rear camera search karein
                     for (let i = 0; i < devices.length; i++) {
                         if (devices[i].label.toLowerCase().includes("back") || 
                             devices[i].label.toLowerCase().includes("rear") ||
@@ -1410,8 +1399,6 @@
                             break;
                         }
                     }
-                    
-                    // Seedha back camera start karein (bina setTimeout ke delay ke)
                     window.html5QrCode.start(backCameraId, scanConfig, onScanSuccess, onScanFailure)
                     .catch(err => {
                         displayStatus("Camera chalu karne mein dikkat aayi.", "error");
@@ -1459,6 +1446,7 @@
 
             if (scanMode === 'tube') {
                 document.getElementById('tube-barcode').value = decodedText;
+                // Agar tube scan hua hai toh man lijiye ki blood collect ho gaya hai
                 document.getElementById('blood-collected').checked = true;
                 syncToggleVisual();
                 saveDraft();
@@ -1503,14 +1491,14 @@
             button.textContent = container.classList.contains('hidden') ? 'Expand Vitals' : 'Hide Vitals';
         }
 
-        // --- WHATSAPP SHARE FIX (DIRECT NUMBER TARGET) ---
+        // --- WHATSAPP SHARE DIRECT NUMBER FIX ---
         function shareWhatsApp(id) {
             const reg = registrations.find(r => r.id === id);
             if (!reg || !reg.mobile) {
                 displayStatus("Valid mobile number not found for this record.", "error");
                 return;
             }
-            
+
             displayStatus("Receipt ban rahi hai...", "secondary");
 
             const printArea = document.getElementById('receipt-print-area');
@@ -1566,23 +1554,29 @@
                         const fileName = `Receipt_${displayId}.png`;
                         const url = window.URL.createObjectURL(blob);
                         
-                        // Auto Download receipt image
+                        // 1. Force Image Download FIRST
                         const a = document.createElement('a');
                         a.style.display = 'none';
                         a.href = url;
                         a.download = fileName;
                         document.body.appendChild(a);
                         a.click();
-                        setTimeout(() => window.URL.revokeObjectURL(url), 2000);
                         
-                        // Format WA link and open directly
+                        setTimeout(() => {
+                            document.body.removeChild(a);
+                            window.URL.revokeObjectURL(url);
+                        }, 2000);
+                        
+                        // 2. Format exact WhatsApp URL & Open specific chat
                         let mobileNumber = reg.mobile.replace(/\D/g, '');
                         if (mobileNumber.length === 10) mobileNumber = '91' + mobileNumber;
                         
-                        const message = `Namaste ${reg.fullName},\n\nAapka Redcliffe Labs ka registration safal raha. Kripya apni details check karein.\n\n*(Kripya abhi download hui receipt ki photo yahan attach karein)*`;
+                        const message = `Namaste ${reg.fullName},\n\nAapka Redcliffe Labs ka registration safal raha. Kripya apni details check karein.\n\n`;
                         const whatsappUrl = `https://wa.me/${mobileNumber}?text=${encodeURIComponent(message)}`;
                         
                         displayStatus("Receipt download ho gayi! WhatsApp khul raha hai...", "success");
+                        
+                        // 3. Open WhatsApp link directly
                         window.open(whatsappUrl, '_blank');
 
                     }, 'image/png');
@@ -1591,7 +1585,7 @@
                     displayStatus("Failed to generate receipt image.", "error");
                     printArea.style.display = 'none';
                 });
-            }, 300); // UI render delay
+            }, 300);
         }
 
         // --- PRINT ---
